@@ -86,14 +86,6 @@ def is_linux():
 class TimeoutException(Exception):
     pass
 
-class FileInfo():
-    def __init__(filehash, name=None):
-        self.filehash = filehash
-        self.name = name
-        self.malname = None
-        self.vendormalname = None
-        self.keywords = set()
-
 def decompress_data(data):
     data=zlib.decompress(data, 16+zlib.MAX_WBITS)
     return data
@@ -280,15 +272,6 @@ def vt_check(mhash, keywords, vendor, other_keywords=None):
         pass
     return False
 
-def write_to_file(f, item_info):
-    f.write("%s\n" % item_info)
-
-def write_list_to_file(filename, input_list):
-    with open(filename, 'w') as f:
-        for item in input_list:
-            f.write("%s\n" % item)
-    print "Saved: " + filename
-
 def make_outfile_name(filename, prefix):
     basename = os.path.basename(filename)
     dirname = os.path.dirname(filename)
@@ -297,9 +280,19 @@ def make_outfile_name(filename, prefix):
     out_name = os.path.join(dirname, basename)
     return out_name
 
+def make_outfile(out_file_name):
+    out_file = open(out_file_name, 'a+')
+    if out_file:
+        info("File: " + out_file_name)
+    else:
+        err("Cannot open file: " + out_file_name)
+        return None
+    return out_file
+
 def main():
     parser = argparse.ArgumentParser(description="VirusTotal checker "+ __VERSION__)
     parser.add_argument('--hashes', dest="hashes", default=None, help="Input file with list of hashes (alternative to dir)")
+    parser.add_argument('--whitelist', dest="whitelist", default=None, help="Input file with list of whitelisted hashes")
     parser.add_argument('--dir', dest="dir", default=None, help="Input directory with files to scan")
     parser.add_argument('--names', dest="names", default=DEFAULT_MALNAMES, help="Searched malware names, ie. " + DEFAULT_MALNAMES)
     parser.add_argument('--keywords', dest="keywords", default=None, help="Other keywords searched in the report")
@@ -335,33 +328,65 @@ def main():
         hashes = hash_to_name.keys()
         input_name = dirstr + ".txt"
 
+    if len(hashes):
+        good("{} hashes loaded.".format(len(hashes)))
+    else:
+        print "[ERROR] No hashes found in given file!"
+        return (-1)
+
+    if args.whitelist:
+        whitelist = get_hashes(args.whitelist)
+
+    if args.whitelist:
+        hashes = hashes - whitelist
+        if len(hashes):
+            good("{} hashes remain after whitelist elimination.".format(len(hashes)))
+        else:
+            err("No hashes remaining after whitelist elimination.")
+            return 0
+
     malnames = args.names.split(',')
     if args.keywords :
         keywords = args.keywords.split(',') 
     else:
         keywords = None
 
+    print "Results will be appended to files:"
+    found_file_name = make_outfile_name( input_name, 'FOUND_')
+    found_file = make_outfile(found_file_name)
+    if found_file is None:
+        return (-1)
+
+    nfound_file_name = make_outfile_name( input_name, 'NOTFOUND_')
+    nfound_file  = make_outfile(nfound_file_name)
+    if found_file is None:
+        return (-1)
+
     for mhash in hashes:
         found = vt_check(mhash, malnames, args.vendor, keywords)
         if found:
+            found_list.append(mhash)
             if hash_to_name is not None:
                 name = hash_to_name[mhash]
                 if name is not None:
                     print name
                     mhash = mhash + " : " + name
-            found_list.append(mhash + " : " + found)
+            found_file.write("%s : %s\n" % (mhash, found))
+            found_file.flush()
         else:
             not_found_list.append(mhash)
+            nfound_file.write("%s\n" % mhash)
+            nfound_file.flush()
         time.sleep(args.sleeptime)
     print "----"
     print "Summary:"
-    found_name = make_outfile_name( input_name, 'FOUND_')
-    good("Found: " + str(len(found_list)))
-    write_list_to_file(found_name, found_list)
 
-    nfound_name = make_outfile_name(input_name, 'NOTFOUND_')
+    good("Found: " + str(len(found_list)))
+    info("File: " + found_file_name)
     err("Not Found: " + str(len(not_found_list)))
-    write_list_to_file(nfound_name, not_found_list)
+    info("File: " + nfound_file_name)
+    found_file.close()
+    nfound_file.close()
     print "----"
     return 1
 
